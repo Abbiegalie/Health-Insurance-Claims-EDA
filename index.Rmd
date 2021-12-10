@@ -1,0 +1,327 @@
+title: 'Project 2: Data Mining, Classification, Prediction'
+author: "SDS322E"
+date: 12/10/2021
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+class_diag <- function(score, truth, positive, cutoff=.5){
+  pred <- factor(score>cutoff,levels=c("TRUE","FALSE"))
+  truth <- factor(truth==positive, levels=c("TRUE","FALSE"))
+  tab<-table(truth, pred)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[1,1]/rowSums(tab)[1]
+  spec=tab[2,2]/rowSums(tab)[2]
+  ppv=tab[1,1]/colSums(tab)[1]
+#CALCULATE F1
+  f1=2*(sens*ppv)/(sens+ppv)
+  
+#CALCULATE EXACT AUC
+  truth<-as.numeric(truth=="TRUE")
+  ord<-order(score, decreasing=TRUE)
+  score <- score[ord]; truth <- truth[ord]
+  TPR=cumsum(truth)/max(1,sum(truth))
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  dup<-c(score[-1]>=score[-length(score)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+  round(data.frame(acc,sens,spec,ppv,f1,ba=(sens+spec)/2,auc, row.names = "Metrics"),4)
+}
+```
+
+# Mining, Classification, Prediction
+
+## Name and EID here
+*Abigail Tovar art2976*
+
+### Introduction 
+
+For this research project, I selected to use an insurance dataset that included factors such as Age, Sex, BMI, Number of Children, Smoker, and Region. These variables are an important component as to how insurance companies determine the health condition of persons requesting for coverage in order to determine premiums.
+I chose this dataset because I was especially interested in what types of big data health insurance use to determine charges, and how linear regression/machine learning and further data analysis might be able to predict the premiums that specific groups would pay.
+
+```{R}
+library(tidyverse)
+library(dplyr)
+insurance  <- read_csv(file = '/stor/home/art2976/insurance.csv')
+
+#I changed the smoker variables to binary where '1' = yes, and '0' = no.
+
+tidy_insurance <- insurance %>% mutate(smoker = ifelse(smoker == "no",0,1)) 
+
+tidy_insurance
+
+tidy_insurance_2 <- insurance %>% mutate(smoker = ifelse(smoker == "no",0,1)) 
+
+```
+
+### Cluster Analysis
+
+```{R}
+library(cluster)
+library(ggplot2)
+library(GGally)
+
+
+set.seed(624)
+pam1 <- tidy_insurance %>% pam(k=2) #use the pam function
+pam1
+
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(tidy_insurance, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+plot(pam1,which=2)
+
+#Visualization
+tidy_insurance %>% select(-smoker, -sex, -region) %>% mutate(cluster=as.factor(pam1$clustering)) %>% ggpairs(columns=1:4, aes(color=cluster))
+
+```
+
+```{R} 
+#Clustering using gower
+set.seed(10)
+
+tidy_insurance$region <- as.factor(tidy_insurance$region)
+
+tidy_insurance$sex <- as.factor(tidy_insurance$sex)
+
+gower1 <- daisy(tidy_insurance, metric=c("gower"))
+
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(gower1, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+pam3 <- pam(gower1, k = 10, diss = T) #tell pam you are using dissimilarities
+
+tidy_insurance %>% slice(pam3$id.med)
+
+#Visualization
+tidy_insurance %>% select(-smoker, -sex, -region) %>% mutate(cluster=as.factor(pam3$clustering)) %>% ggpairs(columns=1:4, aes(color=cluster))
+```
+
+Discussion of clustering here
+To estimate the number of cluster to use in my model, I used the average silhouette method. The function used a different number of clusters then drew the average cluster silhouette according to the number of clusters, which proved the 2 was the peak silhouette width. The average silhouette width k-medoids when clusters were equal to 2 was 0.73 which can be interpreted as a strong structure. Looking at the relationships between the variables using the cluster also reveals that age has a high correlation with bmi and charges, and less correlated to children. Children has less of a correlation with other variables. Charges has a somewhat linear relationship with age, when looking at the scatterplot in the matrix for age and charges. Using gower distance and looking at the final average segments for the clusters, cluster has the highest charges overall and this group has the following variables: female, bmi >30,  smoker,  southeast region. These variables all prove to key in raising charges.
+    
+### Dimensionality Reduction with PCA
+
+```{R}
+library(factoextra)
+
+
+
+#Normalize the Data
+normalize <- function(x)
+{
+  return((x - mean(x))/sd(x))
+}
+
+tidy_insurance_pca <- tidy_insurance_2 %>% select_if(is.numeric) %>% select(-smoker) %>% apply(2, normalize) %>%  as.data.frame()
+
+#Caclulate PCA
+insurance.cov <- cov(tidy_insurance_pca)
+insurance.eigen <- eigen(insurance.cov)  
+
+# Extract eigen values and eigen vectors
+evals <- insurance.eigen$values; evecs <- insurance.eigen$vectors
+
+# sort the eigen values in descending order
+evals.sorted <- sort(evals, decreasing = T)
+
+# Compute proportion of explained variances
+var.exp <- evals.sorted/sum(evals)
+
+ggplot() + geom_bar(aes(y = var.exp, x = 1:4, fill = var.exp), color = "black", stat="identity") + xlab("Principal Component") + ylab("Explained Variances") + geom_text(aes(x=1:4,y=var.exp, label = round(var.exp,2)), vjust=1)
+
+cumprop <- round(cumsum(insurance.eigen$value)/sum(insurance.eigen$value), 2) 
+
+cumprop
+
+com <- princomp(tidy_insurance_pca)
+
+#Analyzing PCs Data
+summary(com, loadings = T)
+eigen(cor(tidy_insurance_pca))
+retained_mat <- insurance.eigen$vectors[,1:3]
+eigen(cor(retained_mat))
+
+#Visualizing
+fviz_pca_biplot(com)
+
+```
+
+Discussions of PCA here. 
+
+To decrease dimensionality in my dataset, I utilized a scree plot to show and determine which PCs to move forward with for analysis; I chose to move foward with PC1, PC2, and PC3, which provided me with *83%* of the overall variance. I also chose the point I chose as at PC3 because it was where the PCs had cumulative proportion of variance of >80%. After summarizing the loading onto the PC scores, and looking at the first 3 PCs I retained, it shows in PC1, similar magnitude and direction, and overall a stronger score in PC1 would correlate to a higher medical expenses. In PC2 the number of children appears to be inversely correlated with BMI. PC3 shows that in age and amount in medical expenses a person pays are inversely correlated with BMI and number of children as well, hence older individuals pay more in medical expenses, and while these two factors are stronger, there is a decrease in BMI. After using the biplot it also seems to confirm that BMI and children have high negative correlation, and children and charges has a lack of correlation. However the BMI has more correlation to charges, and age and charges are strongly positively correlated. One of the outliers in the chart data point #544 belonged to 54 year old female with a very large BMI and health charges, which proves that it is not associated with the general trend from the PCA analysis which reveals that BMI is often reduced as charge and ages increase.
+
+###  Linear Classifier
+
+```{R}
+tidy_insurance_na<- na.omit(tidy_insurance_2)
+logistic_fit <- glm(smoker ~ age + bmi + charges, data = tidy_insurance_na, family = "binomial")
+probs_reg <- predict(logistic_fit, type="response")
+class_diag(probs_reg, tidy_insurance_na$smoker, positive=1)
+model_summ <- summary(probs_reg)
+
+#Make Confusion matrix
+y <- tidy_insurance_2$smoker
+y_hat <- sample(c(0, 1), size=length(y), replace=T)
+y_hat <- factor(y_hat, levels=c(0,1))
+table(actual = y, predicted = y_hat) %>% addmargins
+
+```
+
+```{R}
+# cross-validation of linear classifier here
+set.seed(1234)
+k=10 #choose number of folds
+
+data<-tidy_insurance_2[sample(nrow(tidy_insurance_2)),] #randomly order rows
+folds<-cut(seq(1:nrow(tidy_insurance_2)),breaks=k,labels=F) #create folds
+diags<-NULL
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$smoker ## Truth labels for fold i
+  ## Train model on training set (all but fold i)
+  fit <- glm(smoker~., data=train, family = "binomial")
+  ## Test model on test set (fold i) 
+  probs<-predict(fit, newdata = test,type="response")
+  ## Get diagnostics for fold i
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+summarize_all(diags, mean)
+```
+
+### Non-Parametric Classifier
+
+```{R}
+library(caret)
+set.seed(1234)
+k=5 #choose number of folds
+fit <- knn3(smoker ~ charges+bmi+age, data=tidy_insurance_2)
+probs <- predict(fit, tidy_insurance_2)
+  
+class_diag(probs[,2], tidy_insurance_2$smoker, positive=1)
+
+table(truth = tidy_insurance_2$smoker, prediction = probs[,2]>.5)
+
+```
+
+
+```{R}
+set.seed(1234)
+k=10 #choose number of folds
+
+data<-tidy_insurance_2[sample(nrow(tidy_insurance_2)),] #randomly order rows
+folds<-cut(seq(1:nrow(tidy_insurance_2)),breaks=k,labels=F) #create folds
+diags<-NULL
+
+
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$smoker
+  
+  ## Train model on training set
+  fit<-knn3(smoker~age+charges+bmi,data=train)
+  probs<-predict(fit,newdata = test)
+  
+  ## Test model on test set (save all k results)
+  diags<-rbind(diags,class_diag(probs[,2],truth, positive=1))
+}
+
+summarize_all(diags, mean)
+
+```
+
+
+The linear classifier model I produced using logistic regression has an AUC of around .98, which means the model is performing great. The confusion matrix also proves that the TPR for predicting that people who actually did not smoke were classified as non smokers, is 548/1064=0.51, and FNR is 0.49. The model performs almost identical after using cross validation to predict new observations, as evident by the AUC which was almost identical. When using KNN a non-parametric  algorithm, I got a slightly lower AUC but overall was still great, the same which could be said in terms of the KNN cross validation. Since the Training AUC value and Test/validation AUC value do not differ significantly then this means likely there is no overfitting.
+
+
+### Regression/Numeric Prediction
+
+```{R}
+
+#Use linear regression
+logistic_fit <- lm(charges ~., data = tidy_insurance_2)
+
+sum <- summary(logistic_fit)
+
+prob <- predict(logistic_fit)
+
+sum
+
+#Find Mean Squared error
+mse <- mean((tidy_insurance_2$charges-prob)^2)
+mse
+
+```
+
+```{R}
+# cross-validation of linear regression
+set.seed(1234)
+k=5 #choose number of folds
+data<-insurance[sample(nrow(insurance)),] #randomly order rows
+folds<-cut(seq(1:nrow(insurance)),breaks=k,labels=F) #create folds
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,]
+  test<-data[folds==i,]
+  ## Fit linear regression model to training set
+  fit<-lm(charges~.,data=insurance)
+  ## Get predictions/y-hats on test set (fold i)
+  yhat<-predict(fit,newdata=test)
+  ## Compute prediction error  (MSE) for fold i
+  diags<-mean((test$charges-yhat)^2) 
+}
+mean(diags) ## get average MSE across all folds
+```
+
+Using lm() to perform linear regression, that could be used to predict charges, a numerical variable, from the rest of the variables both categorical and numerical in the dataset. After performing linear regression, looking through the summary statistic revealed interesting information, for example a unit increase in age might increase the medical expenses one pays by 257 dollars, however, a unit increase in smoking - so when the person is a smoker, causes increase of 23,848 dollars - thereby proving to be a costly habit in terms of health insurance coverage. Interestingly, whether an individual resides in the southwest region could mean that their medical costs might reduce by 1035 dollars. The p values determine that the most significant factors in raising medical expenses are BMI, Smoker, and Age, but as smoker has the largest t value it is ranked first in significance. Overall my Mean Squared Error  (MSE) was large for both the linear regression and cross validation testing, however the MSE were close to each other and lower in the test data and this could signfiy that there was not much significant overfitting.  
+
+```{R}
+library(reticulate)
+reticulate::py_config()
+use_python("/usr/bin/python3", required=F)
+```
+
+```{python}
+import pandas as pd
+import numpy as np
+insurance = pd.read_csv("insurance.csv")
+r.tidy_insurance
+insurance
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(py$insurance, aes(age, charges)) + geom_point()+ geom_jitter()
+
+```
+
+Using reticulate to utilize python in Rstudio, with pandas I was able to open my insurance datafile in python, which I checked using r.tidy_insurance to ensure it had the same output. Using ggplot, I then used the py$insurance command to access the insurance dataset I created in  python, to plot the complete data set and display medical charges that were paid by different ages.
+
+
+### Concluding Remarks
+
+Although there could be a few ways to improve the model when considering the significance of certain variables in determining the overall costs my models performed overwell in making predications and learning the most significant variables amongst the dataset such as smoking, it also found the insurance costs decreases slightly from east to west which I found interesting.  One way in which my model could have been improved is through changing the way BMI was categorized, BMI is very important to the overall costs when it is over 30 as that is overweight, so adding an indicator to the model could help it make better predictions. 
