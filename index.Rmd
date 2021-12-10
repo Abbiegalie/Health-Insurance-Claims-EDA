@@ -41,8 +41,7 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
-*Abigail Tovar art2976*
+## *Abigail Tovar art2976*
 
 ### Introduction 
 
@@ -307,7 +306,7 @@ use_python("/usr/bin/python3", required=F)
 ```{python}
 import pandas as pd
 import numpy as np
-insurance = pd.read_csv("insurance.csv")
+insurance = pd.read_csv("~/insurance.csv")
 r.tidy_insurance
 insurance
 ```
